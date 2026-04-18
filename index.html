@@ -53,7 +53,7 @@
     z-index: 60;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: center;
     padding: 20px 28px;
     pointer-events: none;
   }
@@ -250,9 +250,12 @@
   .modal-frame {
     position: relative;
     width: min(1120px, 92vw);
-    max-height: 86vh;
+    height: fit-content;
+    max-height: 92vh;
     display: flex;
     flex-direction: column;
+    gap: 20px;
+    padding: 20px;
     background: #0d0b08;
     border-radius: 6px;
     overflow: hidden;
@@ -267,16 +270,18 @@
   }
   .modal-video {
     width: 100%;
-    max-height: 74vh;
+    max-height: 68vh;
     background: #000;
     display: block;
+    border-radius: 4px;
   }
   .modal-caption {
-    padding: 18px 24px 22px 24px;
+    padding: 0;
     color: var(--cream);
     font-family: var(--sans);
-    background: #111;
-    border-top: 1px solid rgba(250,248,244,0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
   }
   .modal-caption .tags {
     display: flex;
@@ -286,7 +291,6 @@
     text-transform: uppercase;
     font-weight: 500;
     opacity: 0.75;
-    margin-bottom: 6px;
     color: var(--cream);
   }
   .modal-caption .tags span + span::before {
@@ -295,7 +299,7 @@
     opacity: 0.6;
   }
   .modal-caption h3 {
-    margin: 0 0 6px 0;
+    margin: 0;
     font-size: 22px;
     font-weight: 600;
     letter-spacing: -0.01em;
@@ -335,6 +339,7 @@
     transform: scale(1.05);
   }
   .modal-close:focus { outline: 2px solid var(--green); outline-offset: 2px; }
+
   .modal-hint {
     position: absolute;
     left: 18px;
@@ -345,6 +350,7 @@
     text-transform: uppercase;
     color: rgba(250,248,244,0.55);
     pointer-events: none;
+    
   }
 </style>
 </head>
@@ -353,8 +359,8 @@
 <canvas id="webgl"></canvas>
 
 <header class="topbar">
-  <div class="mark">manasi ghutukade · playground</div>
-  <div class="nav">WORK &nbsp;·&nbsp; RESUME &nbsp;·&nbsp; PLAYGROUND &nbsp;·&nbsp; ABOUT</div>
+  <div class="mark">manasi ghutukade · playground - the rabbithole version</div>
+  
 </header>
 
 
@@ -378,7 +384,7 @@
   <div class="modal-frame" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <video class="modal-video" id="modal-video" playsinline controls></video>
     <button class="modal-close" id="modal-close" aria-label="Close and keep walking">×</button>
-    <span class="modal-hint">esc · click outside · to close</span>
+    
     <div class="modal-caption">
       <div class="tags" id="modal-tags"></div>
       <h3 id="modal-title"></h3>
@@ -477,12 +483,60 @@ window.addEventListener("resize", resize);
 // Subtle corridor lighting — enough to shape cards without flattening images.
 scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
+// ---- Floor perspective lines ----
+// A grid of line segments laid flat across the corridor floor. The camera's
+// perspective makes them converge toward the vanishing point, which gives the
+// "walking down a hallway" feeling from the sketch.
+//
+// To stay infinite, the whole grid rides along with the camera: each frame we
+// snap `floor.position.z` to a multiple of the lateral-line spacing so the
+// grid is always centered on the user. Because the grid is periodic at that
+// spacing, snapping makes the lines look fixed in world space even though the
+// mesh itself is continually recentered.
+const FLOOR_Y = -2.1;
+const FLOOR_HALF_W = 7;
+const FLOOR_LAT_SPACING = 3;   // world units between lateral lines
+const FLOOR_REACH = 260;       // how far ahead *and* behind the camera to draw
+
+function buildFloorLines() {
+  const pts = [];
+  // Longitudinal lines (running along the walking direction)
+  for (let x = -FLOOR_HALF_W; x <= FLOOR_HALF_W; x += 1.4) {
+    pts.push(x, FLOOR_Y,  FLOOR_REACH);
+    pts.push(x, FLOOR_Y, -FLOOR_REACH);
+  }
+  // Lateral lines (perpendicular, spaced along Z). Note the symmetric range
+  // so the grid extends equally on both sides of whatever Z we park it at.
+  for (let z = -FLOOR_REACH; z <= FLOOR_REACH; z += FLOOR_LAT_SPACING) {
+    pts.push(-FLOOR_HALF_W, FLOOR_Y, z);
+    pts.push( FLOOR_HALF_W, FLOOR_Y, z);
+  }
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+  const mat = new THREE.LineBasicMaterial({
+    color: 0x1e1e1e,
+    transparent: true,
+    opacity: 0.28,
+    fog: true,
+  });
+  return new THREE.LineSegments(geom, mat);
+}
+const floorLines = buildFloorLines();
+scene.add(floorLines);
+
+function updateFloorLines() {
+  // Snap to the lateral spacing so lines appear stationary relative to the
+  // world grid even though the whole mesh is following the camera.
+  floorLines.position.z =
+    Math.round(camera.position.z / FLOOR_LAT_SPACING) * FLOOR_LAT_SPACING;
+}
+
 // ---- Card generation ----
 // Each card is a PlaneGeometry with an image texture. Cards are placed along
 // the corridor on one of four surfaces: left wall, right wall, ceiling, floor.
 // Spread on the far wall ahead is handled by picking a wide X range at high Z.
 
-const CORRIDOR_SPAN = 260;   // total depth of the corridor in scene units
+const CORRIDOR_SPAN = 500;   // total depth of the corridor in scene units
 const WALL_X = 4.8;
 
 // Each wall is divided into fixed-width "slots" so two cards on the same wall
@@ -495,13 +549,25 @@ const SLOT_STEP = SLOT_W + SLOT_GAP;
 
 // Start each wall a little ahead of the camera; offset the right wall by half
 // a step so cards on opposite walls are interleaved rather than paired up.
-const wallCursor = { left: -5, right: -5 - SLOT_STEP / 2 };
+// Two cursors per wall: `front` advances into -Z (camera walking forward),
+// `back` advances into +Z (user scrolling backward). Either side can grow
+// without bound, which is what makes the corridor feel infinite in both
+// directions.
+const wallFront = { left: -5, right: -5 - SLOT_STEP / 2 };
+const wallBack  = { left:  5, right:  5 - SLOT_STEP / 2 };
 
-function nextSlotZ(side) {
-  const z = wallCursor[side] - SLOT_W / 2;
-  wallCursor[side] -= SLOT_STEP;
+function nextSlotFront(side) {
+  const z = wallFront[side] - SLOT_W / 2;
+  wallFront[side] -= SLOT_STEP;
   return z;
 }
+function nextSlotBack(side) {
+  const z = wallBack[side] + SLOT_W / 2;
+  wallBack[side] += SLOT_STEP;
+  return z;
+}
+// Back-compat alias for initial build (still extends forward).
+const nextSlotZ = nextSlotFront;
 
 // Enough cards to fill the corridor on both walls at initial layout.
 const CARD_COUNT = Math.floor((CORRIDOR_SPAN / SLOT_STEP) * 2);
@@ -611,17 +677,18 @@ function sidePlacement(kind) {
   // (9:16-ish). Cards are resized precisely once their video's metadata loads.
   const h = rand(2.4, 3.4);
   const w = h * 0.62; // initial portrait guess
+  const CARD_Y = 0.2; // align every card to camera eye level
   if (kind === "left") {
     return {
-      pos: [-WALL_X + rand(-0.1, 0.3), rand(-1.0, 1.6), 0],
-      rot: [0, Math.PI / 2, rand(-0.04, 0.04)],
+      pos: [-WALL_X + rand(-0.1, 0.3), CARD_Y, 0],
+      rot: [0, Math.PI / 2, 0],
       size: [w, h],
     };
   }
   if (kind === "right") {
     return {
-      pos: [WALL_X + rand(-0.3, 0.1), rand(-1.0, 1.6), 0],
-      rot: [0, -Math.PI / 2, rand(-0.04, 0.04)],
+      pos: [WALL_X + rand(-0.3, 0.1), CARD_Y, 0],
+      rot: [0, -Math.PI / 2, 0],
       size: [w, h],
     };
   }
@@ -653,7 +720,11 @@ function buildCards() {
     const mat = new THREE.MeshBasicMaterial({ map: initialMap, fog: true });
     const mesh = new THREE.Mesh(geom, mat);
 
-    const z = nextSlotZ(side);
+    // Split the initial layout between forward (-Z) and backward (+Z) of the
+    // starting camera so the corridor is populated in both directions. Pair
+    // each forward placement with a backward one on the SAME wall so both
+    // walls are populated on both sides, not just one-wall-per-direction.
+    const z = ((i >> 1) % 2 === 0) ? nextSlotFront(side) : nextSlotBack(side);
     mesh.position.set(place.pos[0], place.pos[1], z);
     mesh.rotation.set(place.rot[0], place.rot[1], place.rot[2]);
 
@@ -691,8 +762,8 @@ buildCards();
 let targetZ = camera.position.z;
 let activeTween = null;
 
-const WHEEL_SENS = 0.012;
-const EASE_DURATION = 0.55;
+const WHEEL_SENS = 0.02;
+const EASE_DURATION = 0.7;
 
 function nudge(delta) {
   targetZ -= delta; // negative delta advances the camera into -Z
@@ -706,16 +777,27 @@ function nudge(delta) {
 }
 
 function recycleIfNeeded() {
-  // When a card has passed the camera, move it to the far end of its wall,
-  // into the next available slot. Stays on the SAME wall so the slot system
-  // keeps its non-overlap guarantee.
+  // Cards are recycled in both directions so the corridor stays populated no
+  // matter which way the user scrolls. A card that drifts behind the camera
+  // while walking forward gets moved to the far front; a card that drifts
+  // too far ahead while the user scrolls backward gets moved to the near
+  // back. Either way it stays on the SAME wall so slot bookkeeping keeps
+  // its non-overlap guarantee.
   for (const c of cards) {
     if (c.position.z > camera.position.z + 4) {
       const side = c.userData.side;
       const place = sidePlacement(side);
       c.position.x = place.pos[0];
       c.position.y = place.pos[1];
-      c.position.z = nextSlotZ(side);
+      c.position.z = nextSlotFront(side);
+      c.rotation.set(place.rot[0], place.rot[1], place.rot[2]);
+      c.userData.baseRot = [...place.rot];
+    } else if (c.position.z < camera.position.z - (CORRIDOR_SPAN + 4)) {
+      const side = c.userData.side;
+      const place = sidePlacement(side);
+      c.position.x = place.pos[0];
+      c.position.y = place.pos[1];
+      c.position.z = nextSlotBack(side);
       c.rotation.set(place.rot[0], place.rot[1], place.rot[2]);
       c.userData.baseRot = [...place.rot];
     }
@@ -919,6 +1001,7 @@ modal.addEventListener("click", (e) => {
 // no autonomous animation, so a frozen frame is still frozen.
 function tick() {
   updateHover();
+  updateFloorLines();
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
 }
