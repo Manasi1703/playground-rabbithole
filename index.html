@@ -350,7 +350,74 @@
     text-transform: uppercase;
     color: rgba(250,248,244,0.55);
     pointer-events: none;
-    
+
+  }
+
+  /* ---- Responsive ---- */
+  @media (max-width: 900px) {
+    header.topbar { padding: 16px 20px; }
+    header.topbar .mark { font-size: 12px; }
+    .scroll-hint { right: 20px; bottom: 20px; }
+    #overlay { width: min(320px, calc(100vw - 28px)); }
+    .title-block { left: 20px; bottom: 20px; max-width: 70vw; }
+  }
+
+  @media (max-width: 640px) {
+    header.topbar {
+      padding: 12px 14px;
+      justify-content: center;
+    }
+    header.topbar .mark {
+      font-size: 10.5px;
+      text-align: center;
+      line-height: 1.35;
+      letter-spacing: 0.01em;
+    }
+    .scroll-hint {
+      right: 14px;
+      bottom: 14px;
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      gap: 8px;
+    }
+    #overlay {
+      width: min(300px, calc(100vw - 24px));
+      padding: 14px 16px;
+    }
+    #overlay h3 { font-size: 16px; }
+    #overlay p { font-size: 12px; line-height: 1.45; }
+    #overlay .tags,
+    #overlay .meta-row { font-size: 9.5px; letter-spacing: 0.18em; }
+    .modal-frame {
+      width: min(1120px, 96vw);
+      padding: 14px;
+      gap: 14px;
+      max-height: 94vh;
+    }
+    .modal-video { max-height: 52vh; border-radius: 3px; }
+    .modal-caption { gap: 14px; }
+    .modal-caption h3 { font-size: 18px; }
+    .modal-caption p { font-size: 12.5px; }
+    .modal-close {
+      width: 34px; height: 34px;
+      font-size: 20px;
+      top: 10px; right: 10px;
+    }
+    .title-block { left: 14px; bottom: 14px; max-width: calc(100vw - 28px); }
+    .title-block p { font-size: 12px; }
+  }
+
+  @media (max-height: 520px) and (orientation: landscape) {
+    header.topbar { padding: 10px 18px; }
+    .scroll-hint { bottom: 12px; right: 16px; }
+    .modal-video { max-height: 60vh; }
+  }
+
+  /* Touch devices: no hover cursor effects */
+  @media (hover: none) and (pointer: coarse) {
+    body.card-hover { cursor: auto; }
+    .cursor-dot { display: none !important; }
+    #overlay { display: none; }
   }
 </style>
 </head>
@@ -458,7 +525,6 @@ const pick = (arr) => arr[Math.floor(rng() * arr.length)];
 const CREAM = 0xfaf8f4;
 const canvas = document.getElementById("webgl");
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setClearColor(CREAM, 1);
 
 const scene = new THREE.Scene();
@@ -471,14 +537,23 @@ const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 400);
 camera.position.set(0, 0.2, 0);
 camera.lookAt(0, 0.2, -1);
 
+const BASE_FOV = 55;
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(w, h);
   camera.aspect = w / h;
+  // On narrow/portrait aspects the default 55° vertical FOV leaves the
+  // corridor walls off-screen. Widen the vFOV so the horizontal coverage
+  // stays roughly constant, clamped to avoid fish-eye distortion.
+  camera.fov = camera.aspect >= 1
+    ? BASE_FOV
+    : Math.min(BASE_FOV / camera.aspect, 95);
   camera.updateProjectionMatrix();
 }
 resize();
 window.addEventListener("resize", resize);
+window.addEventListener("orientationchange", resize);
 
 // Subtle corridor lighting — enough to shape cards without flattening images.
 scene.add(new THREE.AmbientLight(0xffffff, 1.0));
@@ -871,13 +946,18 @@ window.addEventListener("pointermove", (e) => {
   cursorDot.style.top = e.clientY + "px";
 
   // Position overlay with a small offset from the cursor; flip side if near
-  // the right edge so it never falls off-screen.
+  // the right edge so it never falls off-screen. Read the live overlay width
+  // so the flip logic follows the responsive CSS.
+  const w = overlay.offsetWidth || 340;
+  const h = overlay.offsetHeight || 140;
   const ox = e.clientX + 22;
   const oy = e.clientY + 18;
-  const w = 340;
   const flipped = ox + w + 20 > window.innerWidth;
-  const left = flipped ? e.clientX - w - 22 : ox;
-  overlay.style.transform = `translate3d(${left}px, ${oy}px, 0)`;
+  let left = flipped ? e.clientX - w - 22 : ox;
+  let top = oy;
+  if (left < 8) left = 8;
+  if (top + h + 12 > window.innerHeight) top = window.innerHeight - h - 12;
+  overlay.style.transform = `translate3d(${left}px, ${top}px, 0)`;
 });
 
 function updateHover() {
