@@ -766,6 +766,37 @@ function resizeCardToAspect(card, aspect) {
 // Warm the cache eagerly so posters + videos begin loading at once.
 PROJECTS.forEach(getProjectAsset);
 
+// ---- Non-repeating project picker ----
+// Cards outnumber projects ~10× so naive `PROJECTS[i % len]` makes the same
+// project appear at predictable intervals. Instead we draw at random while
+// excluding the last few picks, so a user walking down the corridor never
+// sees the same project twice within the same visible window. Tracked
+// separately for forward (-Z) and backward (+Z) placement so both sides of
+// the corridor recycle independently.
+const RECENT_WINDOW = Math.min(PROJECTS.length - 1, 8);
+const recentByDir = { front: [], back: [] };
+function pickProject(dir) {
+  const recent = recentByDir[dir];
+  const available = PROJECTS.filter((p) => !recent.includes(p.file));
+  const pool = available.length > 0 ? available : PROJECTS;
+  const project = pool[Math.floor(rng() * pool.length)];
+  recent.push(project.file);
+  if (recent.length > RECENT_WINDOW) recent.shift();
+  return project;
+}
+
+// Swap an existing card over to a different project: update metadata, texture,
+// and (if aspect is known) geometry. Used when a card is recycled to the far
+// end of the corridor so the new slot doesn't replay the project that was just
+// scrolled past.
+function assignProject(card, project) {
+  card.userData.project = project;
+  const asset = getProjectAsset(project);
+  card.material.map = asset.playing ? asset.videoTex : asset.posterTex;
+  card.material.needsUpdate = true;
+  if (asset.aspect) resizeCardToAspect(card, asset.aspect);
+}
+
 function sidePlacement(kind) {
   // Portrait-biased default — most of the source videos are phone recordings
   // (9:16-ish). Cards are resized precisely once their video's metadata loads.
@@ -801,9 +832,10 @@ function buildCards() {
   for (let i = 0; i < CARD_COUNT; i++) sides.push(i % 2 === 0 ? "left" : "right");
 
   for (let i = 0; i < CARD_COUNT; i++) {
-    const project = PROJECTS[i % PROJECTS.length];
     const side = sides[i];
     const place = sidePlacement(side);
+    const dir = ((i >> 1) % 2 === 0) ? "front" : "back";
+    const project = pickProject(dir);
 
     const asset = getProjectAsset(project);
     const geom = new THREE.PlaneGeometry(place.size[0], place.size[1]);
@@ -818,7 +850,7 @@ function buildCards() {
     // starting camera so the corridor is populated in both directions. Pair
     // each forward placement with a backward one on the SAME wall so both
     // walls are populated on both sides, not just one-wall-per-direction.
-    const z = ((i >> 1) % 2 === 0) ? nextSlotFront(side) : nextSlotBack(side);
+    const z = (dir === "front") ? nextSlotFront(side) : nextSlotBack(side);
     mesh.position.set(place.pos[0], place.pos[1], z);
     mesh.rotation.set(place.rot[0], place.rot[1], place.rot[2]);
 
@@ -886,6 +918,7 @@ function recycleIfNeeded() {
       c.position.z = nextSlotFront(side);
       c.rotation.set(place.rot[0], place.rot[1], place.rot[2]);
       c.userData.baseRot = [...place.rot];
+      assignProject(c, pickProject("front"));
     } else if (c.position.z < camera.position.z - (CORRIDOR_SPAN + 4)) {
       const side = c.userData.side;
       const place = sidePlacement(side);
@@ -894,6 +927,7 @@ function recycleIfNeeded() {
       c.position.z = nextSlotBack(side);
       c.rotation.set(place.rot[0], place.rot[1], place.rot[2]);
       c.userData.baseRot = [...place.rot];
+      assignProject(c, pickProject("back"));
     }
   }
 }
